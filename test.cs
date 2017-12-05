@@ -24,26 +24,26 @@ namespace testDjee
       Text = "Djee / Tests on Mono CS with Forms";
       FormBorderStyle = FormBorderStyle.FixedDialog;
       buttonFiledialog = new Button();
-      buttonFiledialog.Location = new System.Drawing.Point(40, 32);
+      buttonFiledialog.Location = new Point(40, 32);
       buttonFiledialog.Text = "Select";
-      buttonFiledialog.Click += new System.EventHandler(OnClick);
+      buttonFiledialog.Click += new EventHandler(OnFileDialogClick);
       Controls.Add(buttonFiledialog);
       buttonSend = new Button();
-      buttonSend.Location = new System.Drawing.Point(120, 32);
+      buttonSend.Location = new Point(120, 32);
       buttonSend.Text = "Send";
-      buttonSend.Click += new System.EventHandler(OnSend);
+      buttonSend.Click += new EventHandler(OnSendClick);
       Controls.Add(buttonSend);
       listBox = new ListBox();
-      listBox.Location = new System.Drawing.Point(40, 80);
-      listBox.Size = new System.Drawing.Size(200, 100);
+      listBox.Location = new Point(40, 80);
+      listBox.Size = new Size(200, 100);
       listBox.SelectionMode = SelectionMode.One;
-      listBox.SelectedIndexChanged += new System.EventHandler(OnSelection);
+      listBox.SelectedIndexChanged += new EventHandler(OnSelection);
       //show list of valid com ports
       textBox = new TextBox();
       textBox.ReadOnly =  true;
       textBox.Multiline = false;
-      textBox.Location = new System.Drawing.Point(40, 200);
-      textBox.Size = new System.Drawing.Size(260, 20);
+      textBox.Location = new Point(40, 200);
+      textBox.Size = new Size(260, 20);
       Controls.Add(textBox);
       foreach (string s in SerialPort.GetPortNames()) {
        listBox.Items.Add(s);
@@ -67,7 +67,7 @@ namespace testDjee
       Application.Run(new MainForm());
     }
     
-    void OnClick(object sender, System.EventArgs e)
+    void OnFileDialogClick(object sender, System.EventArgs e)
     {
         OpenFileDialog myFileDialog = new OpenFileDialog();
         myFileDialog.Filter = "All Files (*.*)|*.*";
@@ -100,7 +100,7 @@ namespace testDjee
     {
       textBox.Text = listBox.SelectedItem.ToString();
     }
-    void OnSend(object sender, System.EventArgs e)
+    void OnSendClick(object sender, System.EventArgs e)
     {
       String str;
       SerialPort serialPort = new SerialPort(listBox.SelectedItem.ToString().Trim(), 38400, Parity.None, 8, StopBits.One);
