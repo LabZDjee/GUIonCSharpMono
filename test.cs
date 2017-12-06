@@ -37,7 +37,8 @@ namespace testDjee
       listBox.Location = new Point(40, 80);
       listBox.Size = new Size(200, 100);
       listBox.SelectionMode = SelectionMode.One;
-      listBox.SelectedIndexChanged += new EventHandler(OnSelection);
+      listBox.SelectedIndexChanged += new EventHandler(
+                  (sndr, e) => {textBox.Text=listBox.SelectedItem.ToString();});
       //show list of valid com ports
       textBox = new TextBox();
       textBox.ReadOnly =  true;
@@ -96,11 +97,7 @@ namespace testDjee
         myFileDialog.Dispose();
         myFileDialog = null;
     }
-    void OnSelection(object sender, System.EventArgs e)
-    {
-      textBox.Text = listBox.SelectedItem.ToString();
-    }
-    void OnSendClick(object sender, System.EventArgs e)
+    void OnSendClick(object sender, EventArgs e)
     {
       String str;
       SerialPort serialPort = new SerialPort(listBox.SelectedItem.ToString().Trim(), 38400, Parity.None, 8, StopBits.One);
