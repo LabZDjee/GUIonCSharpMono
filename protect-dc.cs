@@ -306,6 +306,9 @@ namespace ProtectDc {
     private string _errorDetails;
     // returns error details in case IsOkay is false
     public string ErrorDetails { get { return _errorDetails; } }
+    private bool _fullAttributeSetFlag;
+    // returns whether we want every attributes from file even those without a value
+    public bool FullAttributeFlag { get { return _fullAttributeSetFlag;} }
     private List<string> description;
     private string[] fileContents; // always decoded!
     private List<AgcObject> patchObjList;
@@ -328,11 +331,12 @@ namespace ProtectDc {
     }
     // upon construction this object reads the patch file
     // decodes it if necessary and populates description strings and list of PatchObject
-    public AgcPatchFile(string fullFileName) {
+    public AgcPatchFile(string fullFileName, bool getAllAttributeSet=false) {
       dataLineIndex = -1;
       fileContents = new string[0];
       patchObjList = new List<AgcObject>();
       description = new List<string>();
+      _fullAttributeSetFlag = getAllAttributeSet;
       _fullFileName = fullFileName.Trim();
       if (__encodedFilenameSignature__.Match(_fullFileName).Success) {
         _isOkay = true;
@@ -409,12 +413,12 @@ namespace ProtectDc {
               patchObjAttrList = new List<AgcObjectAttribute>();
               patchObjAttrListofList.Add(patchObjAttrList);
             }
-            if (foundLevel > 1) {
+            if (foundLevel > 1 || _fullAttributeSetFlag) {
               AgcObjectAttribute patchObjAttr = new AgcObjectAttribute
               {
                 name = attribute,
                 position = currentAttributePosition,
-                value = value,
+                value = foundLevel > 1 ? value : null,
                 readOnly = readOnly
               };
               patchObjAttrList.Add(patchObjAttr);
@@ -444,21 +448,25 @@ namespace ProtectDc {
     public string[] GetDecodedContents() {
       return fileContents;
     }
-    public string[] GetEncodedContents() {
-      string[] encoded = new string[fileContents.Length];
+    public static string[] GetEncodedContents(string[] externalContents) {
+      string[] encoded = new string[externalContents.Length];
       int i;
       bool dataArea = false;
-      for (i = 0; i < fileContents.Length; i++) {
+      for (i = 0; i < externalContents.Length; i++) {
         if (dataArea) {
-          byte[] crypt = PdcUtil.AesEncryptStringToBytesAes(fileContents[i], aesKey, aesInitialisationVector);
+          byte[] crypt = PdcUtil.AesEncryptStringToBytesAes(externalContents[i], aesKey, aesInitialisationVector);
           encoded[i] = PdcUtil.ConvertByteArrayToHexString(crypt);
         } else {
-          encoded[i] = fileContents[i];
+          encoded[i] = externalContents[i];
           if (encoded[i] == "[Data]")
             dataArea = true;
         }
       }
-      return (encoded);
+      return encoded;
+
+    }
+    public string[] GetEncodedContents() {
+      return GetEncodedContents(fileContents);
     }
     // returns populated [description]
     public string[] GetDescription() {
