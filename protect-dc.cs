@@ -73,6 +73,7 @@ namespace ProtectDc {
       return plaintext;
     }
     // default string comparison case insensitive
+    // return: true in case of equality
     public static bool StrCaseCmp(string s1, string s2) {
       return (string.Equals(s1, s2, StringComparison.OrdinalIgnoreCase));
     }
@@ -158,6 +159,7 @@ namespace ProtectDc {
       // captures end of multi-line definition: some contents with a finishing double quote
       __endOfMultilineValueDef__ = new Regex(@"^(.*)""[ \t]*$");
     }
+    public static bool CheckFileNamePattern(string filename) => __filenameSignature__.Match(filename.Trim()).Success;
     private string _fullFileName;
     // returns filename as provided to contructor
     public string FullFileName { get { return _fullFileName; } }
@@ -173,7 +175,7 @@ namespace ProtectDc {
     public string ErrorDetails { get { return _errorDetails; } }
     public AgcConfigurationFile(string fullFileName) {
       _fullFileName = fullFileName.Trim();
-      if (__filenameSignature__.Match(_fullFileName).Success) {
+      if (CheckFileNamePattern(_fullFileName)) {
         _isOkay = true;
       } else {
         _isOkay = false;
@@ -276,6 +278,21 @@ namespace ProtectDc {
         yield return result;
       }
     }
+    // return true if some calibration data are different from the default value (1,024)
+    public bool containsNonDefaultCalibrationData() {
+      if (!IsOkay)
+        return false;
+      foreach (AgcLineBreakdown agcLine in BrokenDownList()) {
+        if (PdcUtil.StrCaseCmp(agcLine.section, "$GCAUCalibrationData") &&
+           agcLine.type == AgcLineType.ObjectAttribute && agcLine.name == "CALIBR") {
+          if (agcLine.attribute.value != "1024") {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
   }
   // file extension for patch files:
   //  encoded: agcp 
@@ -292,9 +309,13 @@ namespace ProtectDc {
   public class AgcPatchFile {
     private static Regex __encodedFilenameSignature__;
     private static Regex __decodedFilenameSignature__;
+    private static Regex __agcFilenameSignature__;
     private static Regex __objAttrRegex__;
     private static Regex __attrValRegex__;
     private string _fullFileName;
+    // section tags
+    public const string DescriptionSectionTag = "[Description]";
+    public const string DataSectionTag = "[Data]";
     // returns filename as provided to contructor
     public string FullFileName { get { return _fullFileName; } }
     private bool _isOkay;
@@ -303,12 +324,15 @@ namespace ProtectDc {
     private bool _isEncoded;
     // returns true if patch file data are encoded
     public bool IsEncoded { get { return _isEncoded; } }
+    private bool _fromAgc;
+    // returns true if patch file data are encoded
+    public bool FromAgc { get { return _fromAgc; } }
     private string _errorDetails;
     // returns error details in case IsOkay is false
     public string ErrorDetails { get { return _errorDetails; } }
     private bool _fullAttributeSetFlag;
     // returns whether we want every attributes from file even those without a value
-    public bool FullAttributeFlag { get { return _fullAttributeSetFlag;} }
+    public bool FullAttributeFlag { get { return _fullAttributeSetFlag; } }
     private List<string> description;
     private string[] fileContents; // always decoded!
     private List<AgcObject> patchObjList;
@@ -321,6 +345,8 @@ namespace ProtectDc {
       __encodedFilenameSignature__ = new Regex(@"^.+\.agcp$", RegexOptions.IgnoreCase);
       // defines an acceptable decoded filename
       __decodedFilenameSignature__ = new Regex(@"^.+\.agcp0$", RegexOptions.IgnoreCase);
+      // defines an acceptable agc filename
+      __agcFilenameSignature__ = new Regex(@"^.+\.agc$", RegexOptions.IgnoreCase);
       // captures object name, readonly attribute, attribute and rest of string potentially containing a value
       __objAttrRegex__ = new Regex(@"^([A-Z][A-Z0-9_]*)\.(!?)([A-Za-z0-9]+)(.*)$");
       // captures value from last capture in regex above
@@ -331,7 +357,11 @@ namespace ProtectDc {
     }
     // upon construction this object reads the patch file
     // decodes it if necessary and populates description strings and list of PatchObject
-    public AgcPatchFile(string fullFileName, bool getAllAttributeSet=false) {
+    //  getAllAttributeSet: builds list with all attributes even those bearing no value
+    // this constructor also accepts regular configuration file (.agc)
+    //  in this case, $notes metadata is copied to the [Description] section
+    //  also, flag 'getAllAttributeSet' controls whether to inject (true, or not, false) all calibration data as a read-write object
+    public AgcPatchFile(string fullFileName, bool getAllAttributeSet = false) {
       dataLineIndex = -1;
       fileContents = new string[0];
       patchObjList = new List<AgcObject>();
@@ -341,9 +371,16 @@ namespace ProtectDc {
       if (__encodedFilenameSignature__.Match(_fullFileName).Success) {
         _isOkay = true;
         _isEncoded = true;
+        _fromAgc = false;
       } else if (__decodedFilenameSignature__.Match(_fullFileName).Success) {
         _isOkay = true;
         _isEncoded = false;
+        _fromAgc = false;
+      }
+      else if (__agcFilenameSignature__.Match(_fullFileName).Success) {
+        _isOkay = true;
+        _isEncoded = false;
+        _fromAgc = true;
       } else {
         _isOkay = false;
         _isEncoded = false;
@@ -351,32 +388,82 @@ namespace ProtectDc {
         return;
       }
       string[] contents;
-      try {
-        contents = File.ReadAllLines(_fullFileName);
-        _isOkay = true;
-      }
-      catch (Exception excp) {
-        _isOkay = false;
-        _errorDetails = string.Format("Error: {0}", excp.Message);
-        return;
-      }
-      if (_isEncoded) {
-        bool insideData = false;
-        int i;
-        fileContents = new string[contents.Length];
-        for (i = 0; i < contents.Length; i++) {
-          if (insideData) {
-            byte[] crypt = PdcUtil.ConvertHexStringToByteArray(contents[i]);
-            fileContents[i] = PdcUtil.AesDecryptStringFromBytes(crypt, aesKey, aesInitialisationVector);
-          } else {
-            fileContents[i] = contents[i];
-            if (PdcUtil.StrCaseCmp(contents[i], "[Data]")) {
-              insideData = true;
+      if (_fromAgc) {
+        _isEncoded = false;
+        AgcConfigurationFile agcFile = new AgcConfigurationFile(_fullFileName);
+        if (agcFile.IsOkay == false) {
+          _isOkay = false;
+          _errorDetails = agcFile.ErrorDetails;
+          return;
+        }
+        List<string> description = new List<string>();
+        List<string> data = new List<string>();
+        string value;
+        string previousObject = "";
+        description.Add(DescriptionSectionTag);
+        data.Add(DataSectionTag);
+        IEnumerable<AgcLineBreakdown> brokenDownList = agcFile.BrokenDownList();
+        foreach (AgcLineBreakdown agcLine in brokenDownList) {
+          if (PdcUtil.StrCaseCmp(agcLine.section, "$GCAUConfigurationData")) {
+            if (PdcUtil.StrCaseCmp(agcLine.name, "$Notes")) {
+              for (int i = 0; i < agcLine.values.Count; i++) {
+                value = agcLine.values[i].TrimEnd();
+                if (value.Length > 0)
+                  description.Add(value);
+              }
+            }
+            if (agcLine.type == AgcLineType.ObjectAttribute) {
+              if (previousObject.Length > 0 && PdcUtil.StrCaseCmp(previousObject, agcLine.name)==false) {
+                data.Add("");
+              }
+              value = $"{agcLine.name}.{(agcLine.attribute.readOnly ? "!" : "")}{agcLine.attribute.name} = \"{agcLine.attribute.value}\"";
+              data.Add(value);
+              previousObject=agcLine.name;
             }
           }
+          if (getAllAttributeSet &&
+            PdcUtil.StrCaseCmp(agcLine.section, "$GCAUCalibrationData") &&
+            agcLine.type == AgcLineType.ObjectAttribute &&
+            agcLine.name == "CALIBR") {
+            if (previousObject.Length > 0 && PdcUtil.StrCaseCmp(previousObject, agcLine.name)==false) {
+              data.Add("");
+            }
+            value = $"{agcLine.name}.{agcLine.attribute.name} = \"{agcLine.attribute.value}\"";
+            data.Add(value);
+            previousObject = agcLine.name;
+          }
         }
+        fileContents = new string[data.Count + description.Count];
+        description.CopyTo(fileContents);
+        data.CopyTo(fileContents, description.Count);
       } else {
-        fileContents = contents;
+        try {
+          contents = File.ReadAllLines(_fullFileName);
+          _isOkay = true;
+        }
+        catch (Exception excp) {
+          _isOkay = false;
+          _errorDetails = string.Format("Error: {0}", excp.Message);
+          return;
+        }
+        if (_isEncoded) {
+          bool insideData = false;
+          int i;
+          fileContents = new string[contents.Length];
+          for (i = 0; i < contents.Length; i++) {
+            if (insideData) {
+              byte[] crypt = PdcUtil.ConvertHexStringToByteArray(contents[i]);
+              fileContents[i] = PdcUtil.AesDecryptStringFromBytes(crypt, aesKey, aesInitialisationVector);
+            } else {
+              fileContents[i] = contents[i];
+              if (PdcUtil.StrCaseCmp(contents[i], DataSectionTag)) {
+                insideData = true;
+              }
+            }
+          }
+        } else {
+          fileContents = contents;
+        }
       }
       byte stage = 0;
       string currentObjectInstance = "--";
@@ -389,7 +476,7 @@ namespace ProtectDc {
       for (lineIndex = 0; lineIndex < fileContents.Length; lineIndex++) {
         s = fileContents[lineIndex];
         if (stage == 1) {
-          if (PdcUtil.StrCaseCmp(s, "[Data]")) {
+          if (PdcUtil.StrCaseCmp(s, DataSectionTag)) {
             stage = 2;
             if (lineIndex + 1 < fileContents.Length)
               dataLineIndex = lineIndex + 1;
@@ -429,7 +516,7 @@ namespace ProtectDc {
             currentAttributePosition++;
           }
         } else {
-          if (PdcUtil.StrCaseCmp(s, "[Description]"))
+          if (PdcUtil.StrCaseCmp(s, DescriptionSectionTag))
             stage = 1;
         }
       }
@@ -458,7 +545,7 @@ namespace ProtectDc {
           encoded[i] = PdcUtil.ConvertByteArrayToHexString(crypt);
         } else {
           encoded[i] = externalContents[i];
-          if (encoded[i] == "[Data]")
+          if (encoded[i] == DataSectionTag)
             dataArea = true;
         }
       }
@@ -920,26 +1007,21 @@ namespace ProtectDc {
     public static async Task<FrameError> WriteChunk(RequestReplyDelegate reqRep, WriteChunks.Chunk chunk) {
       ReplyData reply = await reqRep(chunk.Command);
       if (reply.TimedOut) {
-        Debug.WriteLine($"{chunk.Command.Trim()}: {FrameError.Timeout.ToString("g")}"); // debug GG
         return FrameError.Timeout;
       }
       if (reply.Error) {
-        Debug.WriteLine($"{chunk.Command.Trim()}: {FrameError.UndefinedError.ToString("g")}"); // debug GG
         return FrameError.UndefinedError;
       }
       chunk.Reply = reply.Reply;
       ParsedReceivedFrame parsedFrame = ParseReceivedFrame(reply.Reply);
       if (parsedFrame.valid == false) {
-        Debug.WriteLine($"{chunk.Command.Trim()} >> {reply.Reply.Trim()}: {FrameError.WrongFrameFormat.ToString("g")}"); // debug GG
         return FrameError.WrongFrameFormat;
       }
       FrameError frameError = TestIfReplyIsAnExplicitError(parsedFrame);
       if (frameError != FrameError.Ok) {
-        Debug.WriteLine($"{chunk.Command.Trim()} >> {reply.Reply.Trim()}: {frameError.ToString("g")}"); // debug GG
         return frameError;
       }
       frameError = WriteChunks.CheckReply(reply.Reply, chunk);
-      Debug.WriteLine($"{chunk.Command.Trim()} >> {reply.Reply.Trim()}: {frameError.ToString("g")}"); // debug GG
       return frameError;
     }
     // send request 'fullRequest' and returns reply
@@ -983,7 +1065,15 @@ namespace ProtectDc {
         if (SerialPort == null) {
           return new SpgUtil.ReplyData(error: true);
         }
-        SerialPort.Write(request);
+        try {
+          SerialPort.Write(request);
+        }
+        catch (InvalidOperationException) {
+          return new SpgUtil.ReplyData(error: true);
+        }
+        catch (IOException) {
+          return new SpgUtil.ReplyData(error: true);
+        }
         return await Task.Run(() =>
         {
           string reply;
@@ -993,6 +1083,9 @@ namespace ProtectDc {
             }
           }
           catch (InvalidOperationException) {
+            return new SpgUtil.ReplyData(error: true);
+          }
+          catch (IOException) {
             return new SpgUtil.ReplyData(error: true);
           }
           catch (TimeoutException) {
