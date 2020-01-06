@@ -22,7 +22,11 @@ namespace ProtectDc {
       byte[] HexAsBytes = new byte[hexString.Length / 2];
       for (int index = 0; index < HexAsBytes.Length; index++) {
         string byteValue = hexString.Substring(index * 2, 2);
-        HexAsBytes[index] = byte.Parse(byteValue, NumberStyles.HexNumber);
+        try {
+         HexAsBytes[index] = byte.Parse(byteValue, NumberStyles.HexNumber);
+        } catch {
+          throw new ArgumentException(string.Format("Not a valid hex string: {0}", hexString));
+        }
       }
       return HexAsBytes;
     }
@@ -312,6 +316,7 @@ namespace ProtectDc {
     private static Regex __agcFilenameSignature__;
     private static Regex __objAttrRegex__;
     private static Regex __attrValRegex__;
+    private static Regex __validUntilRegex__;
     private string _fullFileName;
     // section tags
     public const string DescriptionSectionTag = "[Description]";
@@ -327,6 +332,9 @@ namespace ProtectDc {
     private bool _fromAgc;
     // returns true if patch file data are encoded
     public bool FromAgc { get { return _fromAgc; } }
+    private bool _isOutDated;
+    // return true if file is outdated
+    public bool IsOutDated {  get { return _isOutDated; } }
     private string _errorDetails;
     // returns error details in case IsOkay is false
     public string ErrorDetails { get { return _errorDetails; } }
@@ -351,6 +359,8 @@ namespace ProtectDc {
       __objAttrRegex__ = new Regex(@"^([A-Z][A-Z0-9_]*)\.(!?)([A-Za-z0-9]+)(.*)$");
       // captures value from last capture in regex above
       __attrValRegex__ = new Regex("^\\s*=\\s*\"(.*)\"");
+      // defines a valid date after which agc file is no longer valid
+      __validUntilRegex__ =  new Regex("^\\$ValidUntil\\s*=\\s*\\\"(\\d{4})/(\\d{2})/(\\d{2})\\\"\\s*");
       // retrieves cryptographic secrets
       aesKey = PdcUtil.ConvertHexStringToByteArray(companySecretAes.SecretAES.Key);
       aesInitialisationVector = PdcUtil.ConvertHexStringToByteArray(hexString: companySecretAes.SecretAES.InitialisationVector);
@@ -361,7 +371,7 @@ namespace ProtectDc {
     // this constructor also accepts regular configuration file (.agc)
     //  in this case, $notes metadata is copied to the [Description] section
     //  also, flag 'getAllAttributeSet' controls whether to inject (true, or not, false) all calibration data as a read-write object
-    public AgcPatchFile(string fullFileName, bool getAllAttributeSet = false) {
+    public AgcPatchFile(string fullFileName, bool getAllAttributeSet = false, bool checkValidityDate = false) {
       dataLineIndex = -1;
       fileContents = new string[0];
       patchObjList = new List<AgcObject>();
@@ -484,6 +494,22 @@ namespace ProtectDc {
             description.Add(s);
           }
         } else if (stage == 2) {
+          Match mo = __validUntilRegex__.Match(s);
+          if(mo.Success && checkValidityDate) {
+            try {
+            int y, m, d;
+            y = int.Parse(mo.Groups[1].Captures[0].Value);
+            m = int.Parse(mo.Groups[2].Captures[0].Value);
+            d = int.Parse(mo.Groups[3].Captures[0].Value);
+            DateTime validityLimit = new DateTime(y, m, d, 23, 59, 59);
+            if(DateTime.Now > validityLimit) {
+                _isOkay = false;
+                _isOutDated = true;
+                _errorDetails = "Validty date expired";
+                return;
+              }
+            } catch { }
+          }
           bool readOnly;
           string obj, attribute, value;
           int foundLevel = ParseAgcLine(s, out obj, out attribute, out readOnly, out value);
@@ -545,12 +571,11 @@ namespace ProtectDc {
           encoded[i] = PdcUtil.ConvertByteArrayToHexString(crypt);
         } else {
           encoded[i] = externalContents[i];
-          if (encoded[i] == DataSectionTag)
+          if (PdcUtil.StrCaseCmp(encoded[i], DataSectionTag))
             dataArea = true;
         }
       }
       return encoded;
-
     }
     public string[] GetEncodedContents() {
       return GetEncodedContents(fileContents);
@@ -1143,6 +1168,7 @@ namespace ProtectDc {
         for (i = 0; i < portNames.Length; i++) {
           SerialPort port = new SerialPort(portNames[i], preferredBaudrates[currentBaudrateIndex], Parity.None, 8, StopBits.Two);
           try {
+            port.WriteTimeout = 100;
             port.Open();
             port.DataReceived += DataReceivedHandler;
             ports.Add(portNames[i], port);
