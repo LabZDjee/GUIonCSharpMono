@@ -371,7 +371,7 @@ namespace ProtectDc {
     // this constructor also accepts regular configuration file (.agc)
     //  in this case, $notes metadata is copied to the [Description] section
     //  also, flag 'getAllAttributeSet' controls whether to inject (true, or not, false) all calibration data as a read-write object
-    public AgcPatchFile(string fullFileName, bool getAllAttributeSet = false, bool checkValidityDate = false) {
+    public AgcPatchFile(string fullFileName, bool getAllAttributeSet = false) {
       dataLineIndex = -1;
       fileContents = new string[0];
       patchObjList = new List<AgcObject>();
@@ -495,7 +495,7 @@ namespace ProtectDc {
           }
         } else if (stage == 2) {
           Match mo = __validUntilRegex__.Match(s);
-          if(mo.Success && checkValidityDate) {
+          if(mo.Success) {
             try {
             int y, m, d;
             y = int.Parse(mo.Groups[1].Captures[0].Value);
@@ -503,10 +503,7 @@ namespace ProtectDc {
             d = int.Parse(mo.Groups[3].Captures[0].Value);
             DateTime validityLimit = new DateTime(y, m, d, 23, 59, 59);
             if(DateTime.Now > validityLimit) {
-                _isOkay = false;
                 _isOutDated = true;
-                _errorDetails = "Validty date expired";
-                return;
               }
             } catch { }
           }
