@@ -23,8 +23,9 @@ namespace ProtectDc {
       for (int index = 0; index < HexAsBytes.Length; index++) {
         string byteValue = hexString.Substring(index * 2, 2);
         try {
-         HexAsBytes[index] = byte.Parse(byteValue, NumberStyles.HexNumber);
-        } catch {
+          HexAsBytes[index] = byte.Parse(byteValue, NumberStyles.HexNumber);
+        }
+        catch {
           throw new ArgumentException(string.Format("Not a valid hex string: {0}", hexString));
         }
       }
@@ -166,19 +167,44 @@ namespace ProtectDc {
     public static bool CheckFileNamePattern(string filename) => __filenameSignature__.Match(filename.Trim()).Success;
     private string _fullFileName;
     // returns filename as provided to contructor
-    public string FullFileName { get { return _fullFileName; } }
+    public string FullFileName {
+      get {
+        return _fullFileName;
+      }
+    }
+    private string _fileName;
+    public string FileName {
+      get {
+        return _fileName;
+      }
+    }
     private List<string> _contents;
     // returns contents of the agc
-    public List<string> Contents
-    { get { return _contents; } set { _contents = value; } }
+    public List<string> Contents {
+      get {
+        return _contents;
+      }
+      set {
+        _contents = value;
+      }
+    }
     private bool _isOkay;
     // returns true if structures could be populated without error
-    public bool IsOkay { get { return _isOkay; } }
+    public bool IsOkay {
+      get {
+        return _isOkay;
+      }
+    }
     private string _errorDetails;
     // returns error details in case IsOkay is false
-    public string ErrorDetails { get { return _errorDetails; } }
+    public string ErrorDetails {
+      get {
+        return _errorDetails;
+      }
+    }
     public AgcConfigurationFile(string fullFileName) {
       _fullFileName = fullFileName.Trim();
+      _fileName = Path.GetFileName(_fullFileName);
       if (CheckFileNamePattern(_fullFileName)) {
         _isOkay = true;
       } else {
@@ -298,6 +324,106 @@ namespace ProtectDc {
     }
 
   }
+  /*
+   * class to deal with a language file
+   */
+  public class LanguageFile {
+    private static Regex __filenameSignature__;
+    private static Regex __recordStructure__;
+    private static Regex __blankLine__;
+    static LanguageFile() {
+      __filenameSignature__ = new Regex(@"^LF_(\d+)_(\d+)_(.+)\.up\.txt$", RegexOptions.IgnoreCase);
+      __recordStructure__ = new Regex(@"^(.+?)/(.+)\x16([0-9A-F]{2})");
+      __blankLine__ = new Regex(@"^\s$");
+    }
+    public string FileName { get => _filename; }
+    private string _filename;
+    public string FullFileName { get => _fullFilename; }
+    private string _fullFilename;
+    public bool FilenamePatternIsOkay { get => _filePatternIsOkay; }
+    private bool _filePatternIsOkay;
+    public bool IsOkay { get => _isOkay; }
+    private bool _isOkay;
+    public string ErrorDetails { get => _errorDetails; }
+    private string _errorDetails;
+    public int Version { get => _version; }
+    private int _version;
+    public int SubVersion { get => _subVersion; }
+    private int _subVersion;
+    public string LanguageTag { get => _languageTag; }
+    private string _languageTag;
+    public LanguageFile(string FullFilename, bool verifyChecksums = true) {
+      _fullFilename = FullFilename.Trim();
+      _filename = Path.GetFileName(_fullFilename);
+      records = new string[0];
+      strippedRecords = new String[0];
+      Match mo = __filenameSignature__.Match(_filename);
+      _version = -1;
+      _subVersion = -1;
+      if (mo.Success) {
+        _filePatternIsOkay = true;
+        int.TryParse(mo.Groups[1].Captures[0].Value, out _version);
+        int.TryParse(mo.Groups[2].Captures[0].Value, out _subVersion);
+        _languageTag = mo.Groups[3].Captures[0].Value;
+        try {
+          string[] fileContents = File.ReadAllLines(FullFilename, Encoding.Default);
+          List<string> recordList = new List<string>();
+          List<string> strippedRecordList = new List<string>();
+          for (int i = 0; i < fileContents.Length; i++) {
+            string line = fileContents[i];
+            if (__blankLine__.Match(line).Success) {
+              continue;
+            }
+            mo = __recordStructure__.Match(line);
+            if (mo.Success) {
+              recordList.Add(line.Trim());
+              string prefix, contents, checksum;
+              prefix = mo.Groups[1].Captures[0].Value;
+              contents = mo.Groups[2].Captures[0].Value;
+              checksum = mo.Groups[3].Captures[0].Value;
+              if (verifyChecksums) {
+                string composedContents = string.Format("{0}/{1}\x16", prefix, contents);
+                SpgUtil.ChecksumValue chk = SpgUtil.CalculateChecksum(composedContents);
+                if (chk.asHexString != checksum) {
+                  _isOkay = false;
+                  _errorDetails = string.Format("wrong checksum at line {0} (should be {1}, not {2})", i + 1, chk.asHexString, checksum);
+                  return;
+                }
+                strippedRecordList.Add(contents);
+              }
+            } else {
+              _isOkay = false;
+              _errorDetails = string.Format("syntax error at line {0}", i + 1);
+              return;
+            }
+          }
+          records = recordList.ToArray();
+          strippedRecords = strippedRecordList.ToArray();
+          _isOkay = true;
+        }
+        catch (Exception excp) {
+          _isOkay = false;
+          _errorDetails = string.Format("I/O Error: {0}", excp.Message);
+          return;
+        }
+
+      } else {
+        _isOkay = false;
+        _errorDetails = "filename does not comply with language file pattern";
+        _languageTag = "";
+        _filePatternIsOkay = false;
+      }
+    }
+    public string[] Records {
+      get => records;
+    }
+    private string[] records;
+    public string[] StrippedRecords {
+      get => strippedRecords;
+    }
+    private string[] strippedRecords;
+
+  }
   // file extension for patch files:
   //  encoded: agcp 
   //  decoded: agcp0
@@ -318,29 +444,64 @@ namespace ProtectDc {
     private static Regex __attrValRegex__;
     private static Regex __validUntilRegex__;
     private string _fullFileName;
+    private string _fileName;
     // section tags
     public const string DescriptionSectionTag = "[Description]";
     public const string DataSectionTag = "[Data]";
     // returns filename as provided to contructor
-    public string FullFileName { get { return _fullFileName; } }
+    public string FullFileName {
+      get {
+        return _fullFileName;
+      }
+    }
+    // return filename without its path (if any)
+    public string FileName {
+      get {
+        return _fileName;
+      }
+    }
     private bool _isOkay;
     // returns true if structures could be populated without error
-    public bool IsOkay { get { return _isOkay; } }
+    public bool IsOkay {
+      get {
+        return _isOkay;
+      }
+    }
     private bool _isEncoded;
     // returns true if patch file data are encoded
-    public bool IsEncoded { get { return _isEncoded; } }
+    public bool IsEncoded {
+      get {
+        return _isEncoded;
+      }
+    }
     private bool _fromAgc;
     // returns true if patch file data are encoded
-    public bool FromAgc { get { return _fromAgc; } }
+    public bool FromAgc {
+      get {
+        return _fromAgc;
+      }
+    }
     private bool _isOutDated;
     // return true if file is outdated
-    public bool IsOutDated {  get { return _isOutDated; } }
+    public bool IsOutDated {
+      get {
+        return _isOutDated;
+      }
+    }
     private string _errorDetails;
     // returns error details in case IsOkay is false
-    public string ErrorDetails { get { return _errorDetails; } }
+    public string ErrorDetails {
+      get {
+        return _errorDetails;
+      }
+    }
     private bool _fullAttributeSetFlag;
     // returns whether we want every attributes from file even those without a value
-    public bool FullAttributeFlag { get { return _fullAttributeSetFlag; } }
+    public bool FullAttributeFlag {
+      get {
+        return _fullAttributeSetFlag;
+      }
+    }
     private List<string> description;
     private string[] fileContents; // always decoded!
     private List<AgcObject> patchObjList;
@@ -360,7 +521,7 @@ namespace ProtectDc {
       // captures value from last capture in regex above
       __attrValRegex__ = new Regex("^\\s*=\\s*\"(.*)\"");
       // defines a valid date after which agc file is no longer valid
-      __validUntilRegex__ =  new Regex("^\\$ValidUntil\\s*=\\s*\\\"(\\d{4})/(\\d{2})/(\\d{2})\\\"\\s*");
+      __validUntilRegex__ = new Regex("^\\$ValidUntil\\s*=\\s*\\\"(\\d{4})/(\\d{2})/(\\d{2})\\\"\\s*");
       // retrieves cryptographic secrets
       aesKey = PdcUtil.ConvertHexStringToByteArray(companySecretAes.SecretAES.Key);
       aesInitialisationVector = PdcUtil.ConvertHexStringToByteArray(hexString: companySecretAes.SecretAES.InitialisationVector);
@@ -378,6 +539,7 @@ namespace ProtectDc {
       description = new List<string>();
       _fullAttributeSetFlag = getAllAttributeSet;
       _fullFileName = fullFileName.Trim();
+      _fileName = Path.GetFileName(_fullFileName);
       if (__encodedFilenameSignature__.Match(_fullFileName).Success) {
         _isOkay = true;
         _isEncoded = true;
@@ -386,8 +548,7 @@ namespace ProtectDc {
         _isOkay = true;
         _isEncoded = false;
         _fromAgc = false;
-      }
-      else if (__agcFilenameSignature__.Match(_fullFileName).Success) {
+      } else if (__agcFilenameSignature__.Match(_fullFileName).Success) {
         _isOkay = true;
         _isEncoded = false;
         _fromAgc = true;
@@ -423,19 +584,19 @@ namespace ProtectDc {
               }
             }
             if (agcLine.type == AgcLineType.ObjectAttribute) {
-              if (previousObject.Length > 0 && PdcUtil.StrCaseCmp(previousObject, agcLine.name)==false) {
+              if (previousObject.Length > 0 && PdcUtil.StrCaseCmp(previousObject, agcLine.name) == false) {
                 data.Add("");
               }
               value = $"{agcLine.name}.{(agcLine.attribute.readOnly ? "!" : "")}{agcLine.attribute.name} = \"{agcLine.attribute.value}\"";
               data.Add(value);
-              previousObject=agcLine.name;
+              previousObject = agcLine.name;
             }
           }
           if (getAllAttributeSet &&
             PdcUtil.StrCaseCmp(agcLine.section, "$GCAUCalibrationData") &&
             agcLine.type == AgcLineType.ObjectAttribute &&
             agcLine.name == "CALIBR") {
-            if (previousObject.Length > 0 && PdcUtil.StrCaseCmp(previousObject, agcLine.name)==false) {
+            if (previousObject.Length > 0 && PdcUtil.StrCaseCmp(previousObject, agcLine.name) == false) {
               data.Add("");
             }
             value = $"{agcLine.name}.{agcLine.attribute.name} = \"{agcLine.attribute.value}\"";
@@ -495,17 +656,18 @@ namespace ProtectDc {
           }
         } else if (stage == 2) {
           Match mo = __validUntilRegex__.Match(s);
-          if(mo.Success) {
+          if (mo.Success) {
             try {
-            int y, m, d;
-            y = int.Parse(mo.Groups[1].Captures[0].Value);
-            m = int.Parse(mo.Groups[2].Captures[0].Value);
-            d = int.Parse(mo.Groups[3].Captures[0].Value);
-            DateTime validityLimit = new DateTime(y, m, d, 23, 59, 59);
-            if(DateTime.Now > validityLimit) {
+              int y, m, d;
+              y = int.Parse(mo.Groups[1].Captures[0].Value);
+              m = int.Parse(mo.Groups[2].Captures[0].Value);
+              d = int.Parse(mo.Groups[3].Captures[0].Value);
+              DateTime validityLimit = new DateTime(y, m, d, 23, 59, 59);
+              if (DateTime.Now > validityLimit) {
                 _isOutDated = true;
               }
-            } catch { }
+            }
+            catch { }
           }
           bool readOnly;
           string obj, attribute, value;
@@ -515,8 +677,7 @@ namespace ProtectDc {
               currentObjectInstance = obj;
               currentAttributePosition = 1;
               patchObjAttrList = new List<AgcObjectAttribute>();
-              patchObjList.Add(new AgcObject
-              {
+              patchObjList.Add(new AgcObject {
                 objectName = currentObjectInstance
               });
               objListIndex++;
@@ -524,8 +685,7 @@ namespace ProtectDc {
               patchObjAttrListofList.Add(patchObjAttrList);
             }
             if (foundLevel > 1 || _fullAttributeSetFlag) {
-              AgcObjectAttribute patchObjAttr = new AgcObjectAttribute
-              {
+              AgcObjectAttribute patchObjAttr = new AgcObjectAttribute {
                 name = attribute,
                 position = currentAttributePosition,
                 value = foundLevel > 1 ? value : null,
@@ -654,7 +814,9 @@ namespace ProtectDc {
     public struct ChecksumValue {
       public byte asByte;
       public string asHexString;
-      public override string ToString() { return (string.Format("{{asByte = {0}, asHexString = {1}}}", asByte, asHexString)); }
+      public override string ToString() {
+        return (string.Format("{{asByte = {0}, asHexString = {1}}}", asByte, asHexString));
+      }
     }
     // calculate checksum of an SPG data frame (defined as covering everything up to and including SYN (0x16) character
     public static ChecksumValue CalculateChecksum(string frame) {
@@ -715,8 +877,7 @@ namespace ProtectDc {
       Regex rx = GetRecvFrameRegex();
       Match match = rx.Match(frame);
       if (!match.Success)
-        return new ParsedReceivedFrame()
-        {
+        return new ParsedReceivedFrame() {
           valid = false,
           troubleReason = FrameError.WrongFrameFormat,
           values = new string[0],
@@ -730,8 +891,7 @@ namespace ProtectDc {
       ChecksumValue checksum = new ChecksumValue() { asByte = (byte)Convert.ToUInt32(checksumStr, 16), asHexString = checksumStr };
       ChecksumValue calculatedCheckSum = CalculateChecksum(frame);
       bool valid = verifyChecksum == false || checksum.asByte == calculatedCheckSum.asByte;
-      return new ParsedReceivedFrame()
-      {
+      return new ParsedReceivedFrame() {
         valid = valid,
         troubleReason = valid ? FrameError.Ok : FrameError.WrongCheckum,
         values = values.ToArray(),
@@ -744,20 +904,34 @@ namespace ProtectDc {
       if (parsedFrame.valid == false || parsedFrame.values.Length < 2 || parsedFrame.values[0] != "#ERROR")
         return parsedFrame.troubleReason;
       switch (parsedFrame.values[1]) {
-        case "SE": return FrameError.RepliedSyntaxError;
-        case "UV": return FrameError.RepliedUnknowVerb;
-        case "UO": return FrameError.RepliedUnknownObject;
-        case "BA": return FrameError.RepliedBadAttributeAddress;
-        case "BV": return FrameError.RepliedBadAttributeValue;
-        case "BR": return FrameError.RepliedBadAttributeRange;
-        case "AL": return FrameError.RepliedAccessLevelTooLow;
-        case "NE": return FrameError.RepliedNotExecuted;
-        case "LL": return FrameError.RepliedLevelLocked;
-        case "NL": return FrameError.RepliedNotLogged;
-        case "UE": return FrameError.RepliedGenericUndefinedError;
-        case "BO": return FrameError.RepliedBufferOverflow;
-        case "DC": return FrameError.RepliedProtocolTemporaryDisconnected;
-        default: return FrameError.UndefinedError;
+        case "SE":
+          return FrameError.RepliedSyntaxError;
+        case "UV":
+          return FrameError.RepliedUnknowVerb;
+        case "UO":
+          return FrameError.RepliedUnknownObject;
+        case "BA":
+          return FrameError.RepliedBadAttributeAddress;
+        case "BV":
+          return FrameError.RepliedBadAttributeValue;
+        case "BR":
+          return FrameError.RepliedBadAttributeRange;
+        case "AL":
+          return FrameError.RepliedAccessLevelTooLow;
+        case "NE":
+          return FrameError.RepliedNotExecuted;
+        case "LL":
+          return FrameError.RepliedLevelLocked;
+        case "NL":
+          return FrameError.RepliedNotLogged;
+        case "UE":
+          return FrameError.RepliedGenericUndefinedError;
+        case "BO":
+          return FrameError.RepliedBufferOverflow;
+        case "DC":
+          return FrameError.RepliedProtocolTemporaryDisconnected;
+        default:
+          return FrameError.UndefinedError;
       }
     }
     // encode SPG values by escaping with backslashes
@@ -768,23 +942,57 @@ namespace ProtectDc {
       foreach (char c0 in value) {
         char c = (char)((int)c0 % 128);
         switch (c) {
-          case '/': result += @"\/"; break;
-          case ':': result += @"\:"; break;
-          case nil: result += @"\0"; break;
-          case '\a': result += @"\a"; break;
-          case '\b': result += @"\b"; break;
-          case '\f': result += @"\f"; break;
-          case '\n': result += @"\n"; break;
-          case '\r': result += @"\r"; break;
-          case '\t': result += @"\t"; break;
-          case '\v': result += @"\v"; break;
-          case '\\': result += @"\\"; break;
-          case '~': result += @"\~"; break;
-          case '$': result += @"\$"; break;
-          case '&': result += @"\&"; break;
-          case '@': result += @"\@"; break;
-          case '_': result += @"\_"; break;
-          case del: result += @"\d"; break;
+          case '/':
+            result += @"\/";
+            break;
+          case ':':
+            result += @"\:";
+            break;
+          case nil:
+            result += @"\0";
+            break;
+          case '\a':
+            result += @"\a";
+            break;
+          case '\b':
+            result += @"\b";
+            break;
+          case '\f':
+            result += @"\f";
+            break;
+          case '\n':
+            result += @"\n";
+            break;
+          case '\r':
+            result += @"\r";
+            break;
+          case '\t':
+            result += @"\t";
+            break;
+          case '\v':
+            result += @"\v";
+            break;
+          case '\\':
+            result += @"\\";
+            break;
+          case '~':
+            result += @"\~";
+            break;
+          case '$':
+            result += @"\$";
+            break;
+          case '&':
+            result += @"\&";
+            break;
+          case '@':
+            result += @"\@";
+            break;
+          case '_':
+            result += @"\_";
+            break;
+          case del:
+            result += @"\d";
+            break;
           default:
             if (c >= 0x20 && c <= 0x7f)
               result += c;
@@ -808,20 +1016,48 @@ namespace ProtectDc {
           doubleEscaped = false;
         } else if (escaped) {
           switch (c) {
-            case '\\': result += '\\'; break;
-            case '0': result += (char)0; break;
-            case 'a': result += "\a"; break;
-            case 'b': result += "\b"; break;
-            case 'c': doubleEscaped = true; break;
-            case 'd': result += (char)0x7f; break;
-            case 'f': result += "\f"; break;
-            case 'n': result += "\n"; break;
-            case 'r': result += "\r"; break;
-            case 't': result += "\t"; break;
-            case 'v': result += "\v"; break;
-            case '<': result += (char)0x1c; break;
-            case '?': result += (char)0x1f; break;
-            default: result += c; break;
+            case '\\':
+              result += '\\';
+              break;
+            case '0':
+              result += (char)0;
+              break;
+            case 'a':
+              result += "\a";
+              break;
+            case 'b':
+              result += "\b";
+              break;
+            case 'c':
+              doubleEscaped = true;
+              break;
+            case 'd':
+              result += (char)0x7f;
+              break;
+            case 'f':
+              result += "\f";
+              break;
+            case 'n':
+              result += "\n";
+              break;
+            case 'r':
+              result += "\r";
+              break;
+            case 't':
+              result += "\t";
+              break;
+            case 'v':
+              result += "\v";
+              break;
+            case '<':
+              result += (char)0x1c;
+              break;
+            case '?':
+              result += (char)0x1f;
+              break;
+            default:
+              result += c;
+              break;
           }
           escaped = false;
         } else if (c == '\\') {
@@ -890,7 +1126,9 @@ namespace ProtectDc {
       public class Chunk {
         public List<AgcObjectAttribute> Attributes; // involved attributes
         public string Command; // SPG command to send
-        public WriteChunks Parent { get; }
+        public WriteChunks Parent {
+          get;
+        }
         public string Reply; // for diagnostic only
         public Chunk(string prefix, WriteChunks parent = null) {
           Attributes = new List<AgcObjectAttribute>();
@@ -901,12 +1139,24 @@ namespace ProtectDc {
       }
       public const int MaxLength = 100; // max accepted length of a command to write
       // external read-only accessors
-      public List<Chunk> Chunks { get; } // result
-      public AgcObject AgcObject { get; }
-      public int SlaveNumber { get; } /* -1: invalid / not defined */
-      public int Channel { get; }     /* -1: invalid / not defined */
-      public string Verb { get; }
-      public string Prefix { get; }
+      public List<Chunk> Chunks {
+        get;
+      } // result
+      public AgcObject AgcObject {
+        get;
+      }
+      public int SlaveNumber {
+        get;
+      } /* -1: invalid / not defined */
+      public int Channel {
+        get;
+      }     /* -1: invalid / not defined */
+      public string Verb {
+        get;
+      }
+      public string Prefix {
+        get;
+      }
       // take an AgcObject, a verb (e.g.: "WCFG"), an optional (positive) slaveNumber, an optional (positive) channel
       // and builds Chunks
       public WriteChunks(AgcObject agcObj, string verb, int slaveNumber = -1, int channel = -1) {
@@ -992,9 +1242,15 @@ namespace ProtectDc {
     }
     // outcome of an asynchronous request
     public class ReplyData {
-      public bool Error { get; } // if false, unknown error, overrides other fields below
-      public bool TimedOut { get; } // if false, timeout error, overrides other fields below
-      public string Reply { get; }
+      public bool Error {
+        get;
+      } // if false, unknown error, overrides other fields below
+      public bool TimedOut {
+        get;
+      } // if false, timeout error, overrides other fields below
+      public string Reply {
+        get;
+      }
       public ReplyData(bool error = false, bool timedOut = false, string reply = "") {
         Error = error;
         TimedOut = timedOut;
@@ -1069,12 +1325,27 @@ namespace ProtectDc {
       public string CommPort; // empty means undefined / not found
       public int Baudrate;
       public int SlaveNumber;
+      public string ControllerSwVersion;
+      public string RegulatorSwVersion;
+      public int LanguageSchema;
+      public int ObjectSchema;
+      public string SerialNumber;
+      public string LocalLanguage;
+      public int ModbusTableVersion;
+      public string SiteId;
+      public string ProjectReference;
     }
     // request-reply asynchronous dialog on a given serial port
     public class RequestReplyHandler : SpgUtil.IRequestReply {
-      public SerialPort SerialPort { get; }
-      public int TimeOutInMs { get; }
-      public SpgUtil.RequestReplyDelegate RequestReplyDelegate { get; }
+      public SerialPort SerialPort {
+        get;
+      }
+      public int TimeOutInMs {
+        get;
+      }
+      public SpgUtil.RequestReplyDelegate RequestReplyDelegate {
+        get;
+      }
       public RequestReplyHandler(SerialPort serialPort, int timeOutInMs = 2000) {
         SerialPort = serialPort;
         TimeOutInMs = timeOutInMs;
@@ -1096,8 +1367,7 @@ namespace ProtectDc {
         catch (IOException) {
           return new SpgUtil.ReplyData(error: true);
         }
-        return await Task.Run(() =>
-        {
+        return await Task.Run(() => {
           string reply;
           try {
             reply = SerialPort.ReadLine();
@@ -1120,6 +1390,7 @@ namespace ProtectDc {
     public class CommDataEventArgs : EventArgs {
       public CommDesc CommDesc;
       public SerialPort SerialPort; // null if comPort open
+      public bool EarlyAbort;
     }
     // try to find a connected gCAU by pinging it on all com ports at different baudrates
     // and publishes an event called 'Result' which carries a CommDataEventArgs report
@@ -1135,11 +1406,14 @@ namespace ProtectDc {
       private int currentBaudrateIndex = 0;
       private System.Timers.Timer timer;
       private int timeOut;
+      private int slaveNumber;
+      private bool userAbort;
       private ISynchronizeInvoke attachedComponent;
       private Action<CommDataEventArgs> attachedGuiCallback;
       // builds object and start chasing connected gcAU
       public ChaseConnection(int preferredBaudrate = 0, int timeoutInMs = 2000,
                              ISynchronizeInvoke component = null, Action<CommDataEventArgs> guiCallback = null) {
+        userAbort = false;
         timeOut = timeoutInMs;
         attachedComponent = component;
         attachedGuiCallback = guiCallback;
@@ -1177,6 +1451,9 @@ namespace ProtectDc {
         } // end for
         SetTimer();
       }
+      public void abort() {
+        userAbort = true;
+      }
       // delegate for publishing result
       public event EventHandler<CommDataEventArgs> Result;
       private void SetTimer() {
@@ -1201,18 +1478,36 @@ namespace ProtectDc {
         SerialPort sp = (SerialPort)sender;
         contents[sp.PortName] += sp.ReadExisting();
         SpgUtil.ParsedReceivedFrame frame = SpgUtil.ParseReceivedFrame(contents[sp.PortName]);
-        if (frame.valid && frame.values[0] == "ECHO" && int.TryParse(frame.values[1], out int slaveNumber)) {
+        if (frame.valid && frame.values[0] == "ECHO" && int.TryParse(frame.values[1], out slaveNumber)) {
+          contents[sp.PortName] = string.Empty;
+          sp.Write($"@{slaveNumber}&1/RCFG/REGISTRY\r");
+          return;
+        }
+        if (frame.valid && frame.values[1] == "REGISTRY") {
           ReleaseTimer();
-          CommDataEventArgs returnedData = new CommDataEventArgs()
-          {
+          CommDataEventArgs returnedData = new CommDataEventArgs() {
+            EarlyAbort = userAbort,
             SerialPort = sp,
-            CommDesc = new CommDesc()
-            {
+            CommDesc = new CommDesc() {
               Baudrate = preferredBaudrates[currentBaudrateIndex],
               CommPort = sp.PortName,
-              SlaveNumber = slaveNumber
+              SlaveNumber = slaveNumber,
+              ControllerSwVersion = frame.values[2],
+              RegulatorSwVersion = frame.values[3],
+              SerialNumber = frame.values[6],
+              LocalLanguage = frame.values[7],
+              LanguageSchema = -1,
+              ObjectSchema = -1,
+              ModbusTableVersion = -1,
             }
           };
+          returnedData.CommDesc.SiteId = SpgUtil.DecodeValue(frame.values[9]);
+          int.TryParse(frame.values[4], out returnedData.CommDesc.LanguageSchema);
+          int.TryParse(frame.values[5], out returnedData.CommDesc.ObjectSchema);
+          int.TryParse(frame.values[8], out returnedData.CommDesc.ModbusTableVersion);
+          if (returnedData.CommDesc.ObjectSchema >= 11) {
+            returnedData.CommDesc.ProjectReference = SpgUtil.DecodeValue(frame.values[21]);
+          }
           foreach (SerialPort otherSp in ports.Values) {
             if (sp != otherSp) {
               otherSp.Close();
@@ -1226,15 +1521,23 @@ namespace ProtectDc {
       private void OnTimeOut(object sender, EventArgs e) {
         ReleaseTimer();
         currentBaudrateIndex++;
-        if (currentBaudrateIndex >= preferredBaudrates.Length) {
-          CommDataEventArgs returnedData = new CommDataEventArgs()
-          {
+        if (currentBaudrateIndex >= preferredBaudrates.Length || userAbort) {
+          CommDataEventArgs returnedData = new CommDataEventArgs() {
+            EarlyAbort = userAbort,
             SerialPort = null,
-            CommDesc = new CommDesc()
-            {
+            CommDesc = new CommDesc() {
               Baudrate = 0,
               CommPort = string.Empty,
-              SlaveNumber = -1
+              SlaveNumber = -1,
+              ControllerSwVersion = "0",
+              RegulatorSwVersion = "0",
+              SerialNumber = "",
+              LocalLanguage = "",
+              LanguageSchema = -1,
+              ObjectSchema = -1,
+              ModbusTableVersion = -1,
+              SiteId = "",
+              ProjectReference = "",
             }
           };
           foreach (SerialPort sp in ports.Values) {
@@ -1258,9 +1561,19 @@ namespace ProtectDc {
   }
   public class TeraTermLanguageUtil {
     private AgcObject[] poLst;
-    public AgcObject[] PatchObjectList { get { return poLst; } }
-    public int NbObjects { get { return poLst.Length; } }
-    public static string escapeTick(string s) { return s.Replace("'", "'#39'"); }
+    public AgcObject[] PatchObjectList {
+      get {
+        return poLst;
+      }
+    }
+    public int NbObjects {
+      get {
+        return poLst.Length;
+      }
+    }
+    public static string escapeTick(string s) {
+      return s.Replace("'", "'#39'");
+    }
     public TeraTermLanguageUtil(AgcObject[] lst) {
       poLst = lst;
     }
@@ -1280,8 +1593,11 @@ namespace ProtectDc {
           case ')':
           case '[':
           case '{':
-            result += @"\" + c; break;
-          default: result += c; break;
+            result += @"\" + c;
+            break;
+          default:
+            result += c;
+            break;
         }
       }
       return (result);
