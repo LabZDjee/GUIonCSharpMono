@@ -1264,14 +1264,14 @@ namespace ProtectDc {
       Task<ReplyData> RequestReply(string request);
     }
     // powerful login procedure...
-    public static async Task<bool> BDLogin(RequestReplyDelegate reqRep) {
+    public static async Task<bool> BDLogin(RequestReplyDelegate reqRep, bool version1 = false) {
       ReplyData reply = await reqRep(CloseSpgCommand("@&1/BKDOOR"));
       if (reply.Error == false && reply.TimedOut == false) {
         ParsedReceivedFrame prf = ParseReceivedFrame(reply.Reply);
         string challengeReply;
         if (prf.valid && prf.values.Length == 2 && prf.values[0] == "BKDOOR"
           && (challengeReply = ComputeBDChallengeReply(prf.values[1])) != string.Empty) {
-          reply = await reqRep(CloseSpgCommand(string.Format("@/LOGIN/2/{0}/50", challengeReply)));
+          reply = await reqRep(CloseSpgCommand(string.Format("@/LOGIN/2/{0}{1}", challengeReply, version1 ? "" : "/50")));
           if (reply.Error == false && reply.TimedOut == false) {
             prf = ParseReceivedFrame(reply.Reply);
             if (prf.valid && prf.values.Length == 2 && prf.values[0] == "LOGIN" && prf.values[1] == "OK")
