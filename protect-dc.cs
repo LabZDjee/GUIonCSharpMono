@@ -1505,7 +1505,7 @@ namespace ProtectDc {
           int.TryParse(frame.values[4], out returnedData.CommDesc.LanguageSchema);
           int.TryParse(frame.values[5], out returnedData.CommDesc.ObjectSchema);
           int.TryParse(frame.values[8], out returnedData.CommDesc.ModbusTableVersion);
-          if (returnedData.CommDesc.ObjectSchema >= 11) {
+          if (returnedData.CommDesc.ObjectSchema >= 11 && frame.values.Length > 21) {
             returnedData.CommDesc.ProjectReference = SpgUtil.DecodeValue(frame.values[21]);
           }
           foreach (SerialPort otherSp in ports.Values) {
